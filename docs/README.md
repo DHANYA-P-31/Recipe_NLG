@@ -2,9 +2,6 @@
 
 A comprehensive ML-powered web application for intelligent recipe analysis and discovery. This system integrates multiple machine learning models to provide health classification, cuisine discovery, and recipe clustering insights.
 
-![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
-![Streamlit](https://img.shields.io/badge/streamlit-1.25+-red.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ---
 
@@ -357,46 +354,12 @@ Modify `app.py` visualization functions:
 - `create_topic_distribution_chart()`
 - `create_feature_importance_chart()`
 
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Areas for improvement:
-- Add more cuisine styles
-- Improve health scoring algorithms
-- Add nutritional information integration
-- Implement recipe recommendations
-- Add user authentication
-- Create API endpoints
 
 ---
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
----
-
-## 👨‍💻 Authors
-
-Built by ML Engineering Team
-
----
-
-## 🙏 Acknowledgments
 
 - **Dataset**: RecipeNLG Dataset
 - **Libraries**: scikit-learn, NLTK, Streamlit, Plotly
 - **Inspiration**: Food science and nutritional research
-
----
-
-## 📧 Support
-
-For issues or questions:
-1. Check the Troubleshooting section
-2. Review training notebooks for model generation
-3. Ensure all dependencies are installed
 
 ---
 
