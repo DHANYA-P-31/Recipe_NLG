@@ -2,9 +2,6 @@
 
 A comprehensive ML-powered web application for intelligent recipe analysis and discovery.
 
-[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Streamlit](https://img.shields.io/badge/streamlit-1.25+-red.svg)](https://streamlit.io/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ---
 
@@ -195,23 +192,6 @@ Modify `app/utils/preprocessing.py` to add new feature extraction logic.
 
 ---
 
-## 🤝 Contributing
-
-Contributions welcome! Areas for improvement:
-- Add more cuisine categories
-- Improve health scoring
-- Add nutritional API integration
-- Create recipe recommendations
-- Add user profiles
-
----
-
-## 📄 License
-
-MIT License - See LICENSE file for details
-
----
-
 ## 🙏 Acknowledgments
 
 - **Dataset:** RecipeNLG
@@ -229,4 +209,3 @@ For issues:
 
 ---
 
-**Built with ❤️ using Python, Streamlit, and Machine Learning**
