@@ -192,23 +192,6 @@ Modify `app/utils/preprocessing.py` to add new feature extraction logic.
 
 ---
 
-## 🤝 Contributing
-
-Contributions welcome! Areas for improvement:
-- Add more cuisine categories
-- Improve health scoring
-- Add nutritional API integration
-- Create recipe recommendations
-- Add user profiles
-
----
-
-## 📄 License
-
-MIT License - See LICENSE file for details
-
----
-
 ## 🙏 Acknowledgments
 
 - **Dataset:** RecipeNLG
@@ -226,4 +209,3 @@ For issues:
 
 ---
 
-**Built with ❤️ using Python, Streamlit, and Machine Learning**
