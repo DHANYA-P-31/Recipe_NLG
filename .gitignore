@@ -50,7 +50,7 @@ RecipeNLG_dataset.csv
 *.log
 logs/
 
-# Models (uncomment if you want to track models in git)
+# Models 
 *.pkl
 
 # Streamlit
