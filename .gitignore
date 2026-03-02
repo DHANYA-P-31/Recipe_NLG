@@ -51,7 +51,7 @@ RecipeNLG_dataset.csv
 logs/
 
 # Models 
-*.pkl
+#*.pkl
 
 # Streamlit
 .streamlit/
