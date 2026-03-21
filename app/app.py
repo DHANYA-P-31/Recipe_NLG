@@ -13,6 +13,9 @@ import joblib
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import ast
+import re
+from typing import List
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
@@ -41,14 +44,24 @@ RL_RECIPE_PROFILES = {
         "name": "Light Fresh Plate",
         "description": "Lighter, quicker option with mild spice and strong nutrition.",
     },
+    "D": {
+        "name": "Hearty Grain Medley",
+        "description": "Fiber-rich grains and legumes with balanced prep time.",
+    },
+    "E": {
+        "name": "Protein Power Skillet",
+        "description": "Protein-focused, spice-forward profile for high satiety meals.",
+    },
 }
 
 RL_ACTION_DISPLAY_NAMES = {
     0: "Recommend Balanced Comfort Bowl",
     1: "Recommend Bold Spiced Fusion",
     2: "Recommend Light Fresh Plate",
-    3: "Suggest ingredient substitution",
-    4: "Adjust cooking steps for faster preparation",
+    3: "Recommend Hearty Grain Medley",
+    4: "Recommend Protein Power Skillet",
+    5: "Suggest ingredient substitution",
+    6: "Adjust cooking steps for faster preparation",
 }
 
 
@@ -906,38 +919,60 @@ Season and serve with fresh herbs."""
     st.caption("Provide constraints to get a policy-based recommendation and expected reward per action.")
     st.caption("Dataset mode scans all recipes in data/RecipeNLG_dataset.csv and returns top matches.")
 
-    profile_col1, profile_col2, profile_col3 = st.columns(3)
-    with profile_col1:
-        st.markdown(
-            f'''<div class="rl-card"><div class="rl-title">{RL_RECIPE_PROFILES["A"]["name"]}</div><p class="rl-text">{RL_RECIPE_PROFILES["A"]["description"]}</p></div>''',
-            unsafe_allow_html=True,
-        )
-    with profile_col2:
-        st.markdown(
-            f'''<div class="rl-card"><div class="rl-title">{RL_RECIPE_PROFILES["B"]["name"]}</div><p class="rl-text">{RL_RECIPE_PROFILES["B"]["description"]}</p></div>''',
-            unsafe_allow_html=True,
-        )
-    with profile_col3:
-        st.markdown(
-            f'''<div class="rl-card"><div class="rl-title">{RL_RECIPE_PROFILES["C"]["name"]}</div><p class="rl-text">{RL_RECIPE_PROFILES["C"]["description"]}</p></div>''',
-            unsafe_allow_html=True,
-        )
+    profile_cols_top = st.columns(3)
+    for i, key in enumerate(["A", "B", "C"]):
+        with profile_cols_top[i]:
+            st.markdown(
+                f'''<div class="rl-card"><div class="rl-title">{RL_RECIPE_PROFILES[key]["name"]}</div><p class="rl-text">{RL_RECIPE_PROFILES[key]["description"]}</p></div>''',
+                unsafe_allow_html=True,
+            )
+
+    profile_cols_bottom = st.columns(2)
+    for i, key in enumerate(["D", "E"]):
+        with profile_cols_bottom[i]:
+            st.markdown(
+                f'''<div class="rl-card"><div class="rl-title">{RL_RECIPE_PROFILES[key]["name"]}</div><p class="rl-text">{RL_RECIPE_PROFILES[key]["description"]}</p></div>''',
+                unsafe_allow_html=True,
+            )
+
+    def _detect_cooking_methods(raw_directions: str) -> List[str]:
+        text = str(raw_directions or "").lower()
+        detected: List[str] = []
+        for method, keywords in rl_model.env.COOKING_METHOD_KEYWORDS.items():
+            if any(keyword in text for keyword in keywords):
+                detected.append(method)
+        return sorted(set(detected))
+
+    detected_method_defaults = _detect_cooking_methods(directions)
 
     with st.form("rl_recommendation_form"):
         rl_col1, rl_col2, rl_col3 = st.columns(3)
 
         with rl_col1:
-            available_ingredients = st.multiselect(
-                "Available Ingredient Types",
+            available_ingredients_text = st.text_area(
+                "Available Ingredients (Full List)",
+                value=ingredients,
+                height=120,
+                placeholder="Enter all ingredients you currently have (comma or new line separated).",
+                help="Provide your full ingredient list. The app auto-maps these to RL ingredient groups."
+            )
+            manual_ingredient_groups = st.multiselect(
+                "Optional: Adjust Ingredient Groups",
                 options=rl_model.env.INGREDIENT_KEYS,
-                default=["vegetables", "protein", "grains", "spices", "oil"],
-                help="These are abstract ingredient groups used by the RL environment."
+                default=[],
+                help="Only use this if you want to manually override the detected groups."
             )
             time_available = st.slider("Time Available (minutes)", min_value=10, max_value=90, value=30, step=5)
 
         with rl_col2:
             diet_pref = st.selectbox("Diet Preference", options=["Non-Vegetarian", "Vegetarian"], index=1)
             spice_pref_label = st.selectbox("Spice Preference", options=["Mild", "Medium", "Hot"], index=1)
+            available_cooking_methods = st.multiselect(
+                "Available Cooking Methods",
+                options=sorted(rl_model.env.COOKING_METHOD_KEYWORDS.keys()),
+                default=detected_method_defaults,
+                help="Select methods you can currently use (auto-detected from directions when possible).",
+            )
 
         with rl_col3:
             past_recipe_label = st.selectbox(
@@ -946,6 +981,8 @@ Season and serve with fresh herbs."""
                     RL_RECIPE_PROFILES["A"]["name"],
                     RL_RECIPE_PROFILES["B"]["name"],
                     RL_RECIPE_PROFILES["C"]["name"],
+                    RL_RECIPE_PROFILES["D"]["name"],
+                    RL_RECIPE_PROFILES["E"]["name"],
                 ],
                 index=0
             )
@@ -970,6 +1007,20 @@ Season and serve with fresh herbs."""
                 value=0.85,
                 step=0.05,
             )
+            nutrition_d = st.slider(
+                f"Estimated Nutrition: {RL_RECIPE_PROFILES['D']['name']}",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.75,
+                step=0.05,
+            )
+            nutrition_e = st.slider(
+                f"Estimated Nutrition: {RL_RECIPE_PROFILES['E']['name']}",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.70,
+                step=0.05,
+            )
             top_n_recipes = st.slider("Number of Dataset Recommendations", min_value=3, max_value=10, value=5, step=1)
             full_scan = st.checkbox(
                 "Full Dataset Scan (~4 min, 2.2M recipes)",
@@ -980,6 +1031,36 @@ Season and serve with fresh herbs."""
         recommend_button = st.form_submit_button("🎯 Get RL Recommendation")
 
     if recommend_button:
+        def _detect_ingredient_groups(raw_ingredients: str) -> List[str]:
+            text = str(raw_ingredients or "").lower()
+            detected: List[str] = []
+            for group, keywords in rl_model.env.INGREDIENT_TYPE_KEYWORDS.items():
+                if any(keyword in text for keyword in keywords):
+                    detected.append(group)
+            return detected
+
+        detected_groups = _detect_ingredient_groups(available_ingredients_text)
+        available_ingredients = sorted(set(manual_ingredient_groups or detected_groups))
+
+        # Parse explicit ingredient items (e.g., chicken, onion) for stricter matching.
+        available_ingredient_items = [
+            item.strip().lower()
+            for item in re.split(r"\n+|\s*,\s*|\s*;\s*", str(available_ingredients_text or ""))
+            if item.strip()
+        ]
+
+        if not available_ingredients:
+            available_ingredients = ["vegetables", "protein", "grains", "spices", "oil"]
+            st.warning(
+                "Could not detect ingredient groups from the provided list. "
+                "Using default groups for RL ranking."
+            )
+        else:
+            st.caption(f"Detected ingredient groups: {', '.join(available_ingredients)}")
+
+        if available_ingredient_items:
+            st.caption(f"Ingredient list used for matching: {', '.join(available_ingredient_items)}")
+
         vegetarian_pref = 1 if diet_pref == "Vegetarian" else 0
         spice_pref_map = {"Mild": 0, "Medium": 1, "Hot": 2}
         spice_pref = spice_pref_map[spice_pref_label]
@@ -987,8 +1068,15 @@ Season and serve with fresh herbs."""
             RL_RECIPE_PROFILES["A"]["name"]: 0,
             RL_RECIPE_PROFILES["B"]["name"]: 1,
             RL_RECIPE_PROFILES["C"]["name"]: 2,
+            RL_RECIPE_PROFILES["D"]["name"]: 3,
+            RL_RECIPE_PROFILES["E"]["name"]: 4,
         }
         past_recipe_type = past_recipe_map[past_recipe_label]
+
+        if available_cooking_methods:
+            st.caption(f"Available cooking methods: {', '.join(available_cooking_methods)}")
+        else:
+            st.caption("Available cooking methods: not specified (all methods considered).")
 
         state = rl_model.env.build_state_from_constraints(
             available_ingredients=available_ingredients,
@@ -996,7 +1084,7 @@ Season and serve with fresh herbs."""
             spice_pref=spice_pref,
             time_available=time_available,
             past_recipe_type=past_recipe_type,
-            nutrition_estimates=[nutrition_a, nutrition_b, nutrition_c],
+            nutrition_estimates=[nutrition_a, nutrition_b, nutrition_c, nutrition_d, nutrition_e],
         )
 
         recommendation = rl_model.recommend(state)
@@ -1043,11 +1131,13 @@ Season and serve with fresh herbs."""
             ranking_result = rl_model.rank_dataset_recipes(
                 dataset_path=Path("data/RecipeNLG_dataset.csv"),
                 available_ingredients=available_ingredients,
+                available_ingredient_items=available_ingredient_items,
+                available_cooking_methods=available_cooking_methods,
                 vegetarian_pref=vegetarian_pref,
                 spice_pref=spice_pref,
                 time_available=time_available,
                 best_action=recommendation['best_action'],
-                nutrition_estimates=[nutrition_a, nutrition_b, nutrition_c],
+                nutrition_estimates=[nutrition_a, nutrition_b, nutrition_c, nutrition_d, nutrition_e],
                 top_n=top_n_recipes,
                 max_rows=None if full_scan else 200_000,
             )
@@ -1060,27 +1150,108 @@ Season and serve with fresh herbs."""
 
             ranked_df = pd.DataFrame(ranking_result["recipes"])
             if not ranked_df.empty:
+                # Backward-compatible handling for results created before text fields were added.
+                if "ingredients_text" not in ranked_df.columns:
+                    ranked_df["ingredients_text"] = ranked_df.get("ingredients", "")
+                if "directions_text" not in ranked_df.columns:
+                    ranked_df["directions_text"] = ranked_df.get("directions", "")
+
                 ranked_df = ranked_df.rename(
                     columns={
                         "title": "Recipe Title",
                         "score": "Match Score",
                         "estimated_time_min": "Est. Time (min)",
                         "vegetarian_compatible": "Veg Compatible",
-                        "source": "Source",
                         "link": "Link",
                     }
                 )
 
-                st.dataframe(
-                    ranked_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Match Score": st.column_config.NumberColumn(format="%.3f"),
-                        "Est. Time (min)": st.column_config.NumberColumn(format="%.1f"),
-                        "Link": st.column_config.LinkColumn(display_text="open"),
-                    },
-                )
+                st.markdown("##### Recipe Details")
+                for idx, row in ranked_df.iterrows():
+                    recipe_name = str(row.get("Recipe Title", "Recipe"))
+                    score_text = f"{float(row.get('Match Score', 0.0)):.3f}"
+                    est_time_text = f"{float(row.get('Est. Time (min)', 0.0)):.1f} min"
+                    veg_text = "Yes" if bool(row.get("Veg Compatible", False)) else "No"
+                    ingredients_text = str(row.get("ingredients_text", "")).strip()
+                    directions_text = str(row.get("directions_text", "")).strip()
+
+                    def _parse_ingredients(text: str) -> List[str]:
+                        raw = (text or "").strip()
+                        if not raw:
+                            return []
+
+                        # Handle serialized list strings such as "['salt', 'pepper']".
+                        try:
+                            maybe_list = ast.literal_eval(raw)
+                            if isinstance(maybe_list, list):
+                                parsed = [str(item).strip() for item in maybe_list if str(item).strip()]
+                                if parsed:
+                                    return parsed
+                        except Exception:
+                            pass
+
+                        cleaned = raw.replace("[", " ").replace("]", " ").replace("\"", " ").replace("'", " ")
+                        parts = [p.strip(" -•\t") for p in re.split(r"\n+|\s*,\s*|\s*;\s*", cleaned)]
+
+                        # Keep order while removing empty/duplicate fragments.
+                        seen = set()
+                        items: List[str] = []
+                        for p in parts:
+                            key = p.lower().strip()
+                            if key and key not in seen:
+                                seen.add(key)
+                                items.append(p)
+                        return items
+
+                    def _parse_directions(text: str) -> List[str]:
+                        raw = (text or "").strip()
+                        if not raw:
+                            return []
+
+                        try:
+                            maybe_list = ast.literal_eval(raw)
+                            if isinstance(maybe_list, list):
+                                parsed = [str(item).strip() for item in maybe_list if str(item).strip()]
+                                if parsed:
+                                    return parsed
+                        except Exception:
+                            pass
+
+                        cleaned = raw.replace("[", " ").replace("]", " ").replace("\"", " ").replace("'", " ")
+                        # Split by numbered markers/newlines/sentence boundaries.
+                        parts = [
+                            p.strip(" -•\t")
+                            for p in re.split(r"\n+|\s*\d+[\.)]\s+|\s*\.\s+(?=[A-Z])|\s*;\s+", cleaned)
+                        ]
+                        return [p for p in parts if p]
+
+                    st.markdown(f"### {idx + 1}. {recipe_name}")
+                    meta_col1, meta_col2, meta_col3 = st.columns(3)
+                    with meta_col1:
+                        st.metric("Match Score", score_text)
+                    with meta_col2:
+                        st.metric("Est. Time", est_time_text)
+                    with meta_col3:
+                        st.metric("Veg Compatible", veg_text)
+
+                    ingredients_items = _parse_ingredients(ingredients_text)
+                    direction_items = _parse_directions(directions_text)
+                    st.caption(f"Parsed: {len(ingredients_items)} ingredients | {len(direction_items)} steps")
+
+                    st.markdown("**Ingredients**")
+                    if ingredients_items:
+                        for i, item in enumerate(ingredients_items, start=1):
+                            st.markdown(f"{i}. {item}")
+                    else:
+                        st.write("Not available in dataset row.")
+
+                    st.markdown("**Directions**")
+                    if direction_items:
+                        for i, item in enumerate(direction_items, start=1):
+                            st.markdown(f"{i}. {item}")
+                    else:
+                        st.write("Not available in dataset row.")
+                    st.markdown("---")
             else:
                 st.info("No matching recipes found for the current constraints.")
 

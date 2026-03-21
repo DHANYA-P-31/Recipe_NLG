@@ -30,8 +30,10 @@ class CookingEnvironment:
         0: "Recommend Recipe A",
         1: "Recommend Recipe B",
         2: "Recommend Recipe C",
-        3: "Suggest ingredient substitution",
-        4: "Adjust cooking steps for faster preparation",
+        3: "Recommend Recipe D",
+        4: "Recommend Recipe E",
+        5: "Suggest ingredient substitution",
+        6: "Adjust cooking steps for faster preparation",
     }
 
     INGREDIENT_KEYS = [
@@ -73,6 +75,14 @@ class CookingEnvironment:
         },
     }
 
+    COOKING_METHOD_KEYWORDS = {
+        "boil": {"boil", "boiled", "simmer", "poach"},
+        "steam": {"steam", "steamed"},
+        "grill": {"grill", "grilled", "broil", "broiled"},
+        "bake": {"bake", "baked", "roast", "roasted"},
+        "fry": {"fry", "fried", "saute", "sauteed", "stir fry", "stir-fry"},
+    }
+
     MEAT_KEYWORDS = {
         "chicken", "beef", "pork", "fish", "salmon", "tuna", "turkey", "shrimp", "bacon", "ham",
         "mutton", "lamb", "sausage", "anchovy", "meat",
@@ -97,6 +107,8 @@ class CookingEnvironment:
             Recipe("Recipe A", (0, 1, 2, 3), vegetarian=1, spice_level=1, prep_time=25, nutrition_score=0.85),
             Recipe("Recipe B", (2, 4, 5, 6), vegetarian=0, spice_level=2, prep_time=40, nutrition_score=0.72),
             Recipe("Recipe C", (1, 3, 6, 7), vegetarian=1, spice_level=0, prep_time=18, nutrition_score=0.90),
+            Recipe("Recipe D", (0, 2, 5, 7), vegetarian=1, spice_level=1, prep_time=30, nutrition_score=0.78),
+            Recipe("Recipe E", (0, 1, 4, 6), vegetarian=0, spice_level=2, prep_time=35, nutrition_score=0.68),
         ]
 
     def _discretize_time(self, minutes: int) -> int:
@@ -119,7 +131,7 @@ class CookingEnvironment:
         spice_pref = int(self.rng.integers(0, 3))
         time_available = int(self.rng.integers(15, 61))
         time_bucket = self._discretize_time(time_available)
-        past_recipe_type = int(self.rng.integers(0, 3))
+        past_recipe_type = int(self.rng.integers(0, len(self.recipes)))
 
         estimated_nutrition = []
         for recipe in self.recipes:
@@ -173,7 +185,10 @@ class QLearningAgent:
         self._ensure_state(state)
         if (not greedy_only) and (self.rng.random() < self.epsilon):
             return int(self.rng.integers(0, self.action_size))
-        return int(np.argmax(self.q_table[state]))
+        q_values = self.q_table[state]
+        max_q = float(np.max(q_values))
+        best_actions = np.flatnonzero(np.isclose(q_values, max_q))
+        return int(self.rng.choice(best_actions))
 
     def update(self, state: Tuple[int, ...], action: int, reward: float, next_state: Tuple[int, ...]) -> None:
         self._ensure_state(state)
@@ -210,13 +225,14 @@ class CookingOptimizationRL:
         vegetarian_pref = int(state[8])
         spice_pref = int(state[9])
         time_bucket = int(state[10])
-        nutrition_bins = state[12:15]
+        past_recipe_type = int(state[11])
+        nutrition_bins = state[12:12 + len(self.env.recipes)]
 
         time_available = [18, 30, 50][time_bucket]
-        is_substitution = action == 3
-        is_fast = action == 4
+        is_substitution = action == 5
+        is_fast = action == 6
 
-        if action in [0, 1, 2]:
+        if 0 <= action < len(self.env.recipes):
             recipe_idx = action
         else:
             recipe_idx = int(np.argmax(nutrition_bins))
@@ -233,8 +249,19 @@ class CookingOptimizationRL:
         spice_match = 1.0 - abs(recipe.spice_level - spice_pref) / 2.0
         match_score = 0.5 * ingredient_ratio + 0.3 * veg_match + 0.2 * spice_match
 
+        # Encourage variety: re-recommending the same previous profile gets a penalty.
+        repeat_penalty = 0.18 if recipe_idx == past_recipe_type else 0.0
+        novelty_bonus = 0.06 if recipe_idx != past_recipe_type else 0.0
+
         time_penalty = max(0.0, (effective_prep - time_available) / 30.0)
-        accept_logit = 2.2 * match_score - 1.2 * time_penalty + (0.12 if is_substitution else 0.0) - 0.25
+        accept_logit = (
+            2.2 * match_score
+            - 1.2 * time_penalty
+            - repeat_penalty
+            + novelty_bonus
+            + (0.12 if is_substitution else 0.0)
+            - 0.25
+        )
         accept_prob = 1.0 / (1.0 + np.exp(-accept_logit))
         selected = int(self.agent.rng.random() < accept_prob)
 
@@ -250,11 +277,15 @@ class CookingOptimizationRL:
             reward += 5
         if recipe.nutrition_score >= 0.75:
             reward += 4
+        if recipe_idx != past_recipe_type:
+            reward += 1
 
         if effective_prep > time_available:
             reward -= 5
         if effective_missing > 0:
             reward -= 6
+        if recipe_idx == past_recipe_type:
+            reward -= 2
         if selected and (not cooked_success) and available_count > 0:
             reward -= 8
         if not selected:
@@ -265,7 +296,16 @@ class CookingOptimizationRL:
 
     def recommend(self, state: Tuple[int, ...]) -> Dict[str, object]:
         q_values, source, avg_distance = self._estimate_q_values(state)
-        best_action = int(np.argmax(q_values))
+
+        # If values are flat (common for unseen/weakly-learned states),
+        # use a state-aware heuristic to avoid always selecting action 0.
+        if np.allclose(q_values, q_values[0]):
+            best_action = self._fallback_action_from_state(state)
+        else:
+            max_q = float(np.max(q_values))
+            best_actions = np.flatnonzero(np.isclose(q_values, max_q))
+            best_action = int(self.agent.rng.choice(best_actions))
+
         return {
             "best_action": best_action,
             "best_action_name": self.env.ACTIONS[best_action],
@@ -274,6 +314,21 @@ class CookingOptimizationRL:
             "value_source": source,
             "avg_neighbor_distance": avg_distance,
         }
+
+    def _fallback_action_from_state(self, state: Tuple[int, ...]) -> int:
+        """Heuristic action for flat Q-values to reduce cold-start tie bias."""
+        time_bucket = int(state[10])
+        nutrition_bins = list(state[12:12 + len(self.env.recipes)])
+
+        # Prefer fastest strategy when time is tight.
+        if time_bucket == 0:
+            return 6
+
+        # Otherwise choose recipe profile with strongest estimated nutrition.
+        if nutrition_bins:
+            return int(np.argmax(nutrition_bins))
+
+        return 0
 
     def _estimate_q_values(self, state: Tuple[int, ...], top_k: int = 25) -> Tuple[np.ndarray, str, float]:
         """Estimate action values for a state.
@@ -314,6 +369,9 @@ class CookingOptimizationRL:
         payload = {
             "q_table": self.agent.q_table,
             "epsilon": self.agent.epsilon,
+            "model_version": 3,
+            "action_size": self.agent.action_size,
+            "recipe_count": len(self.env.recipes),
         }
         joblib.dump(payload, model_path)
 
@@ -321,7 +379,22 @@ class CookingOptimizationRL:
         if not model_path.exists():
             return False
         payload = joblib.load(model_path)
-        self.agent.q_table = payload.get("q_table", {})
+
+        if int(payload.get("model_version", -1)) != 3:
+            return False
+
+        if int(payload.get("action_size", -1)) != self.agent.action_size:
+            return False
+        if int(payload.get("recipe_count", -1)) != len(self.env.recipes):
+            return False
+
+        loaded_q_table = payload.get("q_table", {})
+        if loaded_q_table:
+            sample_q = next(iter(loaded_q_table.values()))
+            if len(sample_q) != self.agent.action_size:
+                return False
+
+        self.agent.q_table = loaded_q_table
         self.agent.epsilon = float(payload.get("epsilon", 0.02))
         return True
 
@@ -370,7 +443,7 @@ class CookingOptimizationRL:
         return float(np.clip(raw, 0.0, 1.0))
 
     def _strategy_target_recipe_idx(self, action: int, nutrition_estimates: List[float]) -> int:
-        if action in [0, 1, 2]:
+        if 0 <= action < len(self.env.recipes):
             return action
         return int(np.argmax(nutrition_estimates))
 
@@ -378,6 +451,8 @@ class CookingOptimizationRL:
         self,
         dataset_path: Path,
         available_ingredients: List[str],
+        available_ingredient_items: List[str] | None,
+        available_cooking_methods: List[str] | None,
         vegetarian_pref: int,
         spice_pref: int,
         time_available: int,
@@ -400,11 +475,19 @@ class CookingOptimizationRL:
             return {"recipes": [], "scanned_rows": 0, "warning": f"Dataset not found: {dataset_path}"}
 
         selected_groups = [g for g in available_ingredients if g in self.env.INGREDIENT_TYPE_KEYWORDS]
+        selected_items = [i.strip().lower() for i in (available_ingredient_items or []) if str(i).strip()]
+        selected_methods = [
+            m for m in (available_cooking_methods or []) if m in self.env.COOKING_METHOD_KEYWORDS
+        ]
 
         # Build regex pattern strings once, outside the chunk loop.
         group_pat_strs: Dict[str, str] = {
             g: '|'.join(re.escape(kw) for kw in self.env.INGREDIENT_TYPE_KEYWORDS[g])
             for g in selected_groups
+        }
+        method_pat_strs: Dict[str, str] = {
+            m: '|'.join(re.escape(kw) for kw in self.env.COOKING_METHOD_KEYWORDS[m])
+            for m in selected_methods
         }
         meat_pat = '|'.join(re.escape(kw) for kw in self.env.MEAT_KEYWORDS)
         healthy_pat = '|'.join(re.escape(kw) for kw in self.env.HEALTHY_KEYWORDS)
@@ -438,6 +521,22 @@ class CookingOptimizationRL:
                 continue
 
             c = chunk[valid].reset_index(drop=True)
+
+            # Keep only rows that contain usable recipe text fields.
+            ingredients_s = c["ingredients"].fillna("").astype(str).str.strip()
+            ner_s = c["NER"].fillna("").astype(str).str.strip()
+            directions_s = c["directions"].fillna("").astype(str).str.strip()
+
+            invalid_tokens = {"", "nan", "none", "[]", "{}"}
+            ingredients_ok = ~ingredients_s.str.lower().isin(invalid_tokens)
+            ner_ok = ~ner_s.str.lower().isin(invalid_tokens)
+            directions_ok = ~directions_s.str.lower().isin(invalid_tokens)
+
+            usable_mask = ingredients_ok | ner_ok | directions_ok
+            if not usable_mask.any():
+                continue
+
+            c = c[usable_mask].reset_index(drop=True)
             titles_arr = c["title"].str.strip().values
 
             # Build combined text series (title + ingredients + NER, all lowercase).
@@ -461,6 +560,34 @@ class CookingOptimizationRL:
                 availability_scores: np.ndarray = group_hits.mean(axis=1)
             else:
                 availability_scores = np.full(len(c), 0.5, dtype=np.float32)
+
+            # ---- Explicit ingredient-item score -------------------------------
+            # Uses user-entered ingredient items (e.g., "chicken") for stricter matching.
+            if selected_items:
+                item_hits = np.stack(
+                    [
+                        combined.str.contains(re.escape(item), regex=True, na=False).astype(np.float32).values
+                        for item in selected_items
+                    ],
+                    axis=1,
+                )
+                ingredient_item_scores: np.ndarray = item_hits.mean(axis=1)
+                item_presence_mask = item_hits.sum(axis=1) > 0
+                if not item_presence_mask.any():
+                    continue
+
+                c = c[item_presence_mask].reset_index(drop=True)
+                titles_arr = c["title"].str.strip().values
+                combined = (
+                    c["title"].str.lower() + " "
+                    + c["ingredients"].str.lower() + " "
+                    + c["NER"].str.lower()
+                )
+                combined_with_dir = combined + " " + c["directions"].str.lower()
+                availability_scores = availability_scores[item_presence_mask]
+                ingredient_item_scores = ingredient_item_scores[item_presence_mask]
+            else:
+                ingredient_item_scores = np.full(len(c), 0.5, dtype=np.float32)
 
             # ---- Vegetarian score --------------------------------------------
             is_non_veg: np.ndarray = combined.str.contains(meat_pat, regex=True, na=False).values
@@ -493,6 +620,19 @@ class CookingOptimizationRL:
             )
             time_bonuses = (est_times <= float(time_available)).astype(np.float32) * 0.1
 
+            # ---- Cooking method score --------------------------------------
+            if method_pat_strs:
+                method_hits = np.stack(
+                    [
+                        dirs_lower.str.contains(pat, regex=True, na=False).astype(np.float32).values
+                        for pat in method_pat_strs.values()
+                    ],
+                    axis=1,
+                )
+                method_scores: np.ndarray = method_hits.mean(axis=1)
+            else:
+                method_scores = np.full(len(c), 0.5, dtype=np.float32)
+
             # ---- Nutrition proxy --------------------------------------------
             # Binary presence of healthy/unhealthy keywords → continuous score.
             h_hits = combined_with_dir.str.contains(healthy_pat, regex=True, na=False).astype(np.float32).values
@@ -502,20 +642,22 @@ class CookingOptimizationRL:
 
             # ---- Strategy bonus ---------------------------------------------
             strategy_bonus = np.zeros(len(c), dtype=np.float32)
-            if best_action == 3:
+            if best_action == 5:
                 # Substitution strategy: favor recipes where some ingredients missing.
                 strategy_bonus += (availability_scores < 0.35).astype(np.float32) * 0.08
-            if best_action == 4:
+            if best_action == 6:
                 # Fast-prep strategy: favor recipes close to (but not over) time limit.
                 strategy_bonus += (est_times <= float(time_available)).astype(np.float32) * 0.08
 
             # ---- Final weighted score ---------------------------------------
             scores = (
-                0.38 * availability_scores
-                + 0.18 * veg_scores
+                0.30 * availability_scores
+                + 0.18 * ingredient_item_scores
+                + 0.15 * veg_scores
                 + 0.14 * spice_scores
-                + 0.16 * time_fits
+                + 0.14 * time_fits
                 + 0.14 * nutrition_fits
+                + 0.05 * method_scores
                 + time_bonuses
                 + strategy_bonus
             ).astype(np.float32)
@@ -526,12 +668,26 @@ class CookingOptimizationRL:
 
             link_arr = c["link"].values
             source_arr = c["source"].values
+            ingredients_arr = c["ingredients"].values
+            ner_arr = c["NER"].values
+            directions_arr = c["directions"].values
             for idx in top_local:
+                ingredients_raw = str(ingredients_arr[idx]).strip()
+                ner_raw = str(ner_arr[idx]).strip()
+                directions_raw = str(directions_arr[idx]).strip()
+
+                ingredients_text = ingredients_raw if ingredients_raw.lower() not in invalid_tokens else ""
+                if not ingredients_text and ner_raw.lower() not in invalid_tokens:
+                    ingredients_text = ner_raw
+
+                directions_text = directions_raw if directions_raw.lower() not in invalid_tokens else ""
                 all_candidates.append(
                     {
                         "title": str(titles_arr[idx]),
                         "source": str(source_arr[idx]),
                         "link": str(link_arr[idx]),
+                        "ingredients_text": ingredients_text,
+                        "directions_text": directions_text,
                         "score": float(scores[idx]),
                         "estimated_time_min": float(est_times[idx]),
                         "vegetarian_compatible": bool(not is_non_veg[idx]),
