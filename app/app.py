@@ -12,6 +12,7 @@ import streamlit as st
 import joblib
 import numpy as np
 import pandas as pd
+from pathlib import Path
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
@@ -22,8 +23,38 @@ from utils.preprocessing import (
     preprocess_text_cuisine, create_cuisine_stopwords,
     combine_features_for_health, calculate_health_score
 )
+from utils.rl_cooking import CookingOptimizationRL
 import warnings
 warnings.filterwarnings('ignore')
+
+
+RL_RECIPE_PROFILES = {
+    "A": {
+        "name": "Balanced Comfort Bowl",
+        "description": "Balanced macros with moderate spice and medium prep time.",
+    },
+    "B": {
+        "name": "Bold Spiced Fusion",
+        "description": "Spice-forward profile with herbs and longer prep time.",
+    },
+    "C": {
+        "name": "Light Fresh Plate",
+        "description": "Lighter, quicker option with mild spice and strong nutrition.",
+    },
+}
+
+RL_ACTION_DISPLAY_NAMES = {
+    0: "Recommend Balanced Comfort Bowl",
+    1: "Recommend Bold Spiced Fusion",
+    2: "Recommend Light Fresh Plate",
+    3: "Suggest ingredient substitution",
+    4: "Adjust cooking steps for faster preparation",
+}
+
+
+def get_action_display_name(action_id):
+    """Map RL action IDs to user-friendly labels for the UI."""
+    return RL_ACTION_DISPLAY_NAMES.get(action_id, f"Action {action_id}")
 
 # Download required NLTK data
 @st.cache_resource
@@ -93,6 +124,20 @@ def load_all_models():
     except Exception as e:
         st.error(f"❌ Error loading models: {e}")
         st.stop()
+
+
+@st.cache_resource
+def load_or_train_rl_agent():
+    """Load a trained RL model, or train and persist it if not found."""
+    rl_model = CookingOptimizationRL(seed=42)
+    model_path = Path('models/cooking_optimization/q_learning_agent.pkl')
+
+    loaded = rl_model.load(model_path)
+    if not loaded:
+        rl_model.train(episodes=6000)
+        rl_model.save(model_path)
+
+    return rl_model
 
 
 # ============================================================================
@@ -476,6 +521,32 @@ def main():
             padding: 0.75rem;
             border-radius: 8px;
         }
+        .rl-panel {
+            background: linear-gradient(140deg, #f8fbff 0%, #f6f9fc 100%);
+            border: 1px solid #dbe7f4;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .rl-card {
+            background: white;
+            border: 1px solid #e1e8f0;
+            border-radius: 10px;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+        }
+        .rl-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #1f3a5f;
+            margin-bottom: 0.25rem;
+        }
+        .rl-text {
+            font-size: 0.92rem;
+            color: #46576c;
+            margin: 0;
+        }
         </style>
     """, unsafe_allow_html=True)
     
@@ -486,6 +557,7 @@ def main():
     # Load models
     with st.spinner("🔄 Loading ML models..."):
         models = load_all_models()
+        rl_model = load_or_train_rl_agent()
     
     # Sidebar
     with st.sidebar:
@@ -608,6 +680,19 @@ Season and serve with fresh herbs."""
             - KMeans clustering
             - TF-IDF similarity
             - Pattern recognition
+            """)
+
+        with st.expander("🤖 Cooking Optimization Agent (RL)"):
+            st.write("""
+            **Recommends:** Best next cooking strategy
+
+            **Optimizes for:**
+            - Time feasibility
+            - Nutrition quality
+            - Ingredient availability
+            - User acceptance likelihood
+
+            **Method:** Q-Learning with epsilon-greedy exploration
             """)
     
     # Analysis Results
@@ -812,13 +897,204 @@ Season and serve with fresh herbs."""
                     st.dataframe(distances_df, use_container_width=True)
                     
                     st.caption("Lower distance = Higher similarity")
+
+    # ============================================================
+    # RL INTERACTIVE RECOMMENDATION PANEL
+    # ============================================================
+    st.markdown('<p class="section-header">🤖 Cooking Optimization Agent (Interactive RL)</p>', unsafe_allow_html=True)
+    st.markdown('<div class="rl-panel">', unsafe_allow_html=True)
+    st.caption("Provide constraints to get a policy-based recommendation and expected reward per action.")
+    st.caption("Dataset mode scans all recipes in data/RecipeNLG_dataset.csv and returns top matches.")
+
+    profile_col1, profile_col2, profile_col3 = st.columns(3)
+    with profile_col1:
+        st.markdown(
+            f'''<div class="rl-card"><div class="rl-title">{RL_RECIPE_PROFILES["A"]["name"]}</div><p class="rl-text">{RL_RECIPE_PROFILES["A"]["description"]}</p></div>''',
+            unsafe_allow_html=True,
+        )
+    with profile_col2:
+        st.markdown(
+            f'''<div class="rl-card"><div class="rl-title">{RL_RECIPE_PROFILES["B"]["name"]}</div><p class="rl-text">{RL_RECIPE_PROFILES["B"]["description"]}</p></div>''',
+            unsafe_allow_html=True,
+        )
+    with profile_col3:
+        st.markdown(
+            f'''<div class="rl-card"><div class="rl-title">{RL_RECIPE_PROFILES["C"]["name"]}</div><p class="rl-text">{RL_RECIPE_PROFILES["C"]["description"]}</p></div>''',
+            unsafe_allow_html=True,
+        )
+
+    with st.form("rl_recommendation_form"):
+        rl_col1, rl_col2, rl_col3 = st.columns(3)
+
+        with rl_col1:
+            available_ingredients = st.multiselect(
+                "Available Ingredient Types",
+                options=rl_model.env.INGREDIENT_KEYS,
+                default=["vegetables", "protein", "grains", "spices", "oil"],
+                help="These are abstract ingredient groups used by the RL environment."
+            )
+            time_available = st.slider("Time Available (minutes)", min_value=10, max_value=90, value=30, step=5)
+
+        with rl_col2:
+            diet_pref = st.selectbox("Diet Preference", options=["Non-Vegetarian", "Vegetarian"], index=1)
+            spice_pref_label = st.selectbox("Spice Preference", options=["Mild", "Medium", "Hot"], index=1)
+
+        with rl_col3:
+            past_recipe_label = st.selectbox(
+                "Previous Recipe Profile",
+                options=[
+                    RL_RECIPE_PROFILES["A"]["name"],
+                    RL_RECIPE_PROFILES["B"]["name"],
+                    RL_RECIPE_PROFILES["C"]["name"],
+                ],
+                index=0
+            )
+            nutrition_a = st.slider(
+                f"Estimated Nutrition: {RL_RECIPE_PROFILES['A']['name']}",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.80,
+                step=0.05,
+            )
+            nutrition_b = st.slider(
+                f"Estimated Nutrition: {RL_RECIPE_PROFILES['B']['name']}",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.70,
+                step=0.05,
+            )
+            nutrition_c = st.slider(
+                f"Estimated Nutrition: {RL_RECIPE_PROFILES['C']['name']}",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.85,
+                step=0.05,
+            )
+            top_n_recipes = st.slider("Number of Dataset Recommendations", min_value=3, max_value=10, value=5, step=1)
+            full_scan = st.checkbox(
+                "Full Dataset Scan (~4 min, 2.2M recipes)",
+                value=False,
+                help="Un-checked = quick scan of first 200,000 recipes (~20 sec). Checked = full scan of all 2.2M recipes.",
+            )
+
+        recommend_button = st.form_submit_button("🎯 Get RL Recommendation")
+
+    if recommend_button:
+        vegetarian_pref = 1 if diet_pref == "Vegetarian" else 0
+        spice_pref_map = {"Mild": 0, "Medium": 1, "Hot": 2}
+        spice_pref = spice_pref_map[spice_pref_label]
+        past_recipe_map = {
+            RL_RECIPE_PROFILES["A"]["name"]: 0,
+            RL_RECIPE_PROFILES["B"]["name"]: 1,
+            RL_RECIPE_PROFILES["C"]["name"]: 2,
+        }
+        past_recipe_type = past_recipe_map[past_recipe_label]
+
+        state = rl_model.env.build_state_from_constraints(
+            available_ingredients=available_ingredients,
+            vegetarian_pref=vegetarian_pref,
+            spice_pref=spice_pref,
+            time_available=time_available,
+            past_recipe_type=past_recipe_type,
+            nutrition_estimates=[nutrition_a, nutrition_b, nutrition_c],
+        )
+
+        recommendation = rl_model.recommend(state)
+        q_values = recommendation['q_values']
+        display_action = get_action_display_name(recommendation['best_action'])
+
+        st.success(f"Recommended Strategy: {display_action}")
+
+        if recommendation.get('value_source') == 'nearest_neighbors':
+            st.info(
+                f"Q-values estimated from nearest learned states "
+                f"(avg Hamming distance: {recommendation.get('avg_neighbor_distance', 0.0):.2f})."
+            )
+        elif recommendation.get('value_source') == 'exact':
+            st.caption("Q-values retrieved from exact state match in the learned policy.")
+
+        rl_metrics_col1, rl_metrics_col2 = st.columns(2)
+        with rl_metrics_col1:
+            st.metric("Selected Action ID", recommendation['best_action'])
+        with rl_metrics_col2:
+            st.metric("Expected Reward (Best)", f"{float(np.max(q_values)):.3f}")
+
+        action_df = pd.DataFrame(
+            {
+                'action': [get_action_display_name(i) for i in range(len(q_values))],
+                'expected_reward': q_values,
+            }
+        ).sort_values('expected_reward', ascending=False)
+
+        reward_fig = px.bar(
+            action_df,
+            x='expected_reward',
+            y='action',
+            orientation='h',
+            title='Expected Reward by Action (Q-Values)',
+            color='expected_reward',
+            color_continuous_scale='Blues'
+        )
+        reward_fig.update_layout(height=360, margin=dict(l=20, r=20, t=50, b=20))
+        st.plotly_chart(reward_fig, use_container_width=True)
+
+        scan_label = "Scanning all 2.2M recipes..." if full_scan else "Quick-scanning first 200,000 recipes..."
+        with st.spinner(scan_label):
+            ranking_result = rl_model.rank_dataset_recipes(
+                dataset_path=Path("data/RecipeNLG_dataset.csv"),
+                available_ingredients=available_ingredients,
+                vegetarian_pref=vegetarian_pref,
+                spice_pref=spice_pref,
+                time_available=time_available,
+                best_action=recommendation['best_action'],
+                nutrition_estimates=[nutrition_a, nutrition_b, nutrition_c],
+                top_n=top_n_recipes,
+                max_rows=None if full_scan else 200_000,
+            )
+
+        if ranking_result.get("warning"):
+            st.warning(ranking_result["warning"])
+        else:
+            st.markdown("#### Top Dataset Recipes")
+            st.caption(f"Scanned rows: {ranking_result['scanned_rows']:,}")
+
+            ranked_df = pd.DataFrame(ranking_result["recipes"])
+            if not ranked_df.empty:
+                ranked_df = ranked_df.rename(
+                    columns={
+                        "title": "Recipe Title",
+                        "score": "Match Score",
+                        "estimated_time_min": "Est. Time (min)",
+                        "vegetarian_compatible": "Veg Compatible",
+                        "source": "Source",
+                        "link": "Link",
+                    }
+                )
+
+                st.dataframe(
+                    ranked_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Match Score": st.column_config.NumberColumn(format="%.3f"),
+                        "Est. Time (min)": st.column_config.NumberColumn(format="%.1f"),
+                        "Link": st.column_config.LinkColumn(display_text="open"),
+                    },
+                )
+            else:
+                st.info("No matching recipes found for the current constraints.")
+
+        with st.expander("View Encoded RL State Vector"):
+            st.write(state)
+
+    st.markdown('</div>', unsafe_allow_html=True)
     
     # Footer
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #7f8c8d;'>
         <p>🧠 Powered by Machine Learning | Built with Streamlit</p>
-        <p>Models: Random Forest, SVM, LDA Topic Modeling, KMeans Clustering</p>
+        <p>Models: Random Forest, SVM, LDA Topic Modeling, KMeans Clustering, Q-Learning</p>
     </div>
     """, unsafe_allow_html=True)
 

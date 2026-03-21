@@ -22,13 +22,23 @@ REM Activate virtual environment
 echo Activating virtual environment...
 call .venv\Scripts\activate.bat
 
-REM Check if models exist
-if not exist "lda_model.pkl" (
+REM Check if core models exist
+if not exist "models\cuisine_discovery\lda_model.pkl" (
     echo.
     echo WARNING: Models not found!
     echo Please run the training notebooks first:
-    echo   1. cuisineDiscovery.ipynb
-    echo   2. healthyPrediction.ipynb
+    echo   1. notebooks/cuisineDiscovery.ipynb
+    echo   2. notebooks/healthyPrediction.ipynb
+    echo.
+    pause
+)
+
+if not exist "models\health_prediction\health_rf_model.pkl" (
+    echo.
+    echo WARNING: Models not found!
+    echo Please run the training notebooks first:
+    echo   1. notebooks/cuisineDiscovery.ipynb
+    echo   2. notebooks/healthyPrediction.ipynb
     echo.
     pause
 )
@@ -42,6 +52,6 @@ echo Press Ctrl+C to stop the server.
 echo ========================================
 echo.
 
-streamlit run app/app.py
+".venv\Scripts\python.exe" -m streamlit run app/app.py
 
 pause
